@@ -1,0 +1,23 @@
+{
+  "name": "codespaces-react",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@emailjs/browser": "^4.4.1",
+    "body-parser": "^1.20.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "mongoose": "^8.5.4",
+    "mongodb": "^6.8.0",
+    "mysql": "^2.18.1",
+    "mysql2": "^3.11.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "backend": "nodemon server.js"
+  },
+  "main": "server.js",
+  "license": "ISC"
+}
