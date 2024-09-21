@@ -7,8 +7,7 @@ const app = express();
 // Middleware
 app.use(cors({
   origin: [
-    'http://localhost:3000', // for local development
-    'https://qhvpqmhj-3000.inc1.devtunnels.ms' // add your DevTunnels URL
+    'https://reactrouter.connectingdotserp.com' // frntend url
   ],
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type'],
