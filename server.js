@@ -7,7 +7,7 @@ const app = express();
 // Middleware
 app.use(cors({
   origin: [
-    'https://reactrouter.connectingdotserp.com' // frntend url
+    'https://www.connectingdotserp.com' // frntend url
   ],
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type'],
