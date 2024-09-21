@@ -4,24 +4,34 @@ const cors = require("cors");
 const bodyParser = require("body-parser");
 const app = express();
 
-// Middleware
+// Middleware to handle CORS
 app.use(cors({
-  origin: [
-    'https://www.connectingdotserp.com' // frntend url
-  ],
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type'],
+  origin: 'https://www.connectingdotserp.com',  // Allow this origin
+  methods: ['GET', 'POST'],  // Specify allowed HTTP methods
+  allowedHeaders: ['Content-Type', 'Authorization'],  // Allow necessary headers
+  credentials: true  // Allow credentials like cookies
 }));
 
-app.use(bodyParser.json()); // To parse incoming JSON request bodies
+// Handle preflight requests for CORS
+app.options('*', cors({
+  origin: 'https://www.connectingdotserp.com',
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
+
+// Middleware to parse JSON request bodies
+app.use(bodyParser.json());
 
 // MongoDB connection
 mongoose.connect("mongodb+srv://connectingerp1:connecting@connectingcluster.6ifho.mongodb.net/dataconnecting", {
   useNewUrlParser: true,
   useUnifiedTopology: true,
-}).then(() => {
+})
+.then(() => {
   console.log("Connected to MongoDB");
-}).catch((err) => {
+})
+.catch((err) => {
   console.log("Error connecting to MongoDB:", err);
 });
 
@@ -33,7 +43,6 @@ const userSchema = new mongoose.Schema({
   coursename: String,
   createdAt: { type: Date, default: Date.now }  // Automatically set timestamp
 });
-
 
 const User = mongoose.model("User", userSchema);
 
@@ -49,7 +58,7 @@ app.post("/api/submit", async (req, res) => {
       coursename
     });
 
-    await newUser.save(); // Save to MongoDB
+    await newUser.save();  // Save to MongoDB
     console.log("User saved to database:", newUser);  // Log success
     
     res.status(200).json({ message: "User registered successfully!" });
@@ -62,7 +71,7 @@ app.post("/api/submit", async (req, res) => {
 // API route to fetch all users (leads)
 app.get("/api/leads", async (req, res) => {
   try {
-    const users = await User.find(); // Fetch all users from the database
+    const users = await User.find();  // Fetch all users from the database
     res.status(200).json(users);
   } catch (error) {
     console.error("Error fetching leads:", error);
