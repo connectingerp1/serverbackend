@@ -11,7 +11,8 @@
     "mongoose": "^8.5.4",
     "mongodb": "^6.8.0",
     "mysql": "^2.18.1",
-    "mysql2": "^3.11.0"
+    "mysql2": "^3.11.0",
+     "@sendgrid/mail": "^7.4.0"
   },
   "scripts": {
     "start": "node server.js",
