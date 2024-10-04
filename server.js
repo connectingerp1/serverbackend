@@ -2,20 +2,16 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const bodyParser = require("body-parser");
+const sgMail = require('@sendgrid/mail');  
+
 const app = express();
+
+// Set SendGrid API key
+sgMail.setApiKey('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');  // Replace with your SendGrid API key
 
 // Middleware to handle CORS
 app.use(cors({
-  origin: ['https://www.connectingdotserp.com', 'https://qhvpqmhj-3000.inc1.devtunnels.ms'],  // Allow these origins
-  methods: ['GET', 'POST'],  // Specify allowed HTTP methods
-  allowedHeaders: ['Content-Type', 'Authorization'],  // Allow necessary headers
-  credentials: true  // Allow credentials like cookies
-}));
-
-
-// Handle preflight requests for CORS
-app.options('*', cors({
-  origin: 'https://www.connectingdotserp.com',
+  origin: ['https://www.connectingdotserp.com', 'https://qhvpqmhj-3000.inc1.devtunnels.ms'],
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
@@ -61,10 +57,30 @@ app.post("/api/submit", async (req, res) => {
 
     await newUser.save();  // Save to MongoDB
     console.log("User saved to database:", newUser);  // Log success
-    
+
+    // Send email notification using SendGrid
+    const msg = {
+      to: 'connectingerp1@gmail.com',  // Replace with your email to receive notifications
+      from: 'connectingerp1@gmail.com',  // Replace with your verified sender email on SendGrid
+      subject: 'New User Submission',
+      text: `A new user has registered. 
+      Name: ${name}
+      Email: ${email}
+      Contact: ${contact}
+      Course: ${coursename}`,
+      html: `<h3>New User Registered</h3>
+            <p><strong>Name:</strong> ${name}</p>
+            <p><strong>Email:</strong> ${email}</p>
+            <p><strong>Contact:</strong> ${contact}</p>
+            <p><strong>Course Name:</strong> ${coursename}</p>`
+    };
+
+    await sgMail.send(msg);  // Send the email
+    console.log("Email sent to notify about the new registration");
+
     res.status(200).json({ message: "User registered successfully!" });
   } catch (error) {
-    console.error("Error saving user:", error);
+    console.error("Error saving user or sending email:", error);
     res.status(500).json({ message: "Error saving user data" });
   }
 });
