@@ -6,11 +6,12 @@ const app = express();
 
 // Middleware to handle CORS
 app.use(cors({
-  origin: 'https://www.connectingdotserp.com',  // Allow this origin
+  origin: ['https://www.connectingdotserp.com', 'https://qhvpqmhj-3000.inc1.devtunnels.ms'],  // Allow these origins
   methods: ['GET', 'POST'],  // Specify allowed HTTP methods
   allowedHeaders: ['Content-Type', 'Authorization'],  // Allow necessary headers
   credentials: true  // Allow credentials like cookies
 }));
+
 
 // Handle preflight requests for CORS
 app.options('*', cors({
