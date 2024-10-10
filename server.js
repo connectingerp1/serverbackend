@@ -7,7 +7,7 @@ const sgMail = require('@sendgrid/mail');
 const app = express();
 
 // Set SendGrid API key
-sgMail.setApiKey('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');  // Replace with your SendGrid API key
+sgMail.setApiKey('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');  // Replace with your SendGrid API key
 
 // Middleware to handle CORS
 app.use(cors({
@@ -46,45 +46,42 @@ const User = mongoose.model("User", userSchema);
 // API route to handle form submissions
 app.post("/api/submit", async (req, res) => {
   const { name, email, contact, coursename } = req.body;
-
   try {
-    const newUser = new User({
-      name,
-      email,
-      contact,
-      coursename
-    });
+    const newUser = new User({ name, email, contact, coursename });
+    await newUser.save();
+    console.log("User saved to database:", newUser);
 
-    await newUser.save();  // Save to MongoDB
-    console.log("User saved to database:", newUser);  // Log success
+    // Try sending the email
+    try {
+      const msg = {
+        to: 'connectingerp1@gmail.com',
+        from: 'connectingerp1@gmail.com',
+        subject: 'New User Submission',
+        text: `A new user has registered. 
+        Name: ${name}
+        Email: ${email}
+        Contact: ${contact}
+        Course: ${coursename}`,
+        html: `<h3>New User Registered</h3>
+              <p><strong>Name:</strong> ${name}</p>
+              <p><strong>Email:</strong> ${email}</p>
+              <p><strong>Contact:</strong> ${contact}</p>
+              <p><strong>Course Name:</strong> ${coursename}</p>`
+      };
 
-    // Send email notification using SendGrid
-    const msg = {
-      to: 'connectingerp1@gmail.com',  // Replace with your email to receive notifications
-      from: 'connectingerp1@gmail.com',  // Replace with your verified sender email on SendGrid
-      subject: 'New User Submission',
-      text: `A new user has registered. 
-      Name: ${name}
-      Email: ${email}
-      Contact: ${contact}
-      Course: ${coursename}`,
-      html: `<h3>New User Registered</h3>
-            <p><strong>Name:</strong> ${name}</p>
-            <p><strong>Email:</strong> ${email}</p>
-            <p><strong>Contact:</strong> ${contact}</p>
-            <p><strong>Course Name:</strong> ${coursename}</p>`
-    };
-
-    await sgMail.send(msg);  // Send the email
-    console.log("Email sent to notify about the new registration");
+      await sgMail.send(msg);
+      console.log("Email sent to notify about the new registration");
+    } catch (emailError) {
+      console.error("Error sending email:", emailError.message);
+      // Optionally, you can continue with the 200 status if saving is successful
+    }
 
     res.status(200).json({ message: "User registered successfully!" });
-  } catch (error) {
-    console.error("Error saving user or sending email:", error);
-    res.status(500).json({ message: "Error saving user data" });
+  } catch (dbError) {
+    console.error("Error saving user:", dbError.message);
+    res.status(500).json({ message: "Internal Server Error", error: dbError.message });
   }
 });
-
 // API route to fetch all users (leads)
 app.get("/api/leads", async (req, res) => {
   try {
