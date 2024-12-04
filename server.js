@@ -38,6 +38,7 @@ const userSchema = new mongoose.Schema({
   email: { type: String, unique: true, sparse: true }, // Enforce uniqueness
   contact: String,
   coursename: String,
+  location: String,
   createdAt: { type: Date, default: Date.now },
 });
 
@@ -46,9 +47,9 @@ const User = mongoose.model("User", userSchema);
 
 // API route to handle form submissions
 app.post("/api/submit", async (req, res) => {
-  const { name, email, contact, coursename } = req.body;
+  const { name, email, contact, coursename, location } = req.body;
   try {
-    const newUser = new User({ name, email, contact, coursename });
+    const newUser = new User({ name, email, contact, coursename, location });
     await newUser.save();
     console.log("User saved to database:", newUser);
 
@@ -62,12 +63,14 @@ app.post("/api/submit", async (req, res) => {
         Name: ${name}
         Email: ${email}
         Contact: ${contact}
-        Course: ${coursename}`,
+        Course: ${coursename}
+        Location: ${location}`,
         html: `<h3>New User Registered</h3>
               <p><strong>Name:</strong> ${name}</p>
               <p><strong>Email:</strong> ${email}</p>
               <p><strong>Contact:</strong> ${contact}</p>
-              <p><strong>Course Name:</strong> ${coursename}</p>`
+              <p><strong>Course Name:</strong> ${coursename}</p>
+              <p><strong>Location:</strong> ${location}</p>`
       };
 
       await sgMail.send(msg);
