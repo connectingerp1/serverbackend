@@ -11,7 +11,7 @@ const app = express();
 
 // Middleware to handle CORS
 app.use(cors({
-  origin: ['https://www.connectingdotserp.com', 'https://qhvpqmhj-3999.inc1.devtunnels.ms'],
+  origin: ['https://connectingdotserp.com/', 'https://qhvpqmhj-3999.inc1.devtunnels.ms'],
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
