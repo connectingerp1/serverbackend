@@ -35,11 +35,12 @@ mongoose.connect("mongodb+srv://connectingerp1:connecting@connectingcluster.6ifh
 // Mongoose schema and model
 const userSchema = new mongoose.Schema({
   name: String,
-  email: String,
+  email: { type: String, unique: true, sparse: true }, // Enforce uniqueness
   contact: String,
   coursename: String,
-  createdAt: { type: Date, default: Date.now }  // Automatically set timestamp
+  createdAt: { type: Date, default: Date.now },
 });
+
 
 const User = mongoose.model("User", userSchema);
 
