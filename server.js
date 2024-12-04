@@ -17,6 +17,8 @@ app.use(cors({
   credentials: true
 }));
 
+// Preflight request handler
+app.options("*", cors());
 // Middleware to parse JSON request bodies
 app.use(bodyParser.json());
 
