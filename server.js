@@ -37,7 +37,7 @@ mongoose.connect("mongodb+srv://connectingerp1:connecting@connectingcluster.6ifh
 // Mongoose schema and model
 const userSchema = new mongoose.Schema({
   name: String,
-  email: { type: String, unique: true, sparse: true }, // Enforce uniqueness
+  email: String,
   contact: String,
   coursename: String,
   location: String,
