@@ -11,7 +11,7 @@ sgMail.setApiKey('SG.oDeRO7loRl2PJrOaSipQYw.OYjTGWsZBVkLGVf-BXcNl7o0v3Pxl0BSbYZY
 
 // Middleware to handle CORS
 app.use(cors({
-  origin: ['https://connectingdotserp.com/', 'https://qhvpqmhj-3999.inc1.devtunnels.ms'],
+  origin: ['https://connectingdotserp.com', 'https://qhvpqmhj-3999.inc1.devtunnels.ms'],
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
