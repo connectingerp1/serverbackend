@@ -8,7 +8,7 @@ const app = express();
 
 // Set SendGrid API key
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-// sgMail.setApiKey('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');  // Replace with your SendGrid API key
+// sgMail.setApiKey('');  // Replace with your SendGrid API key
 
 // Middleware to handle CORS
 app.use(cors({
