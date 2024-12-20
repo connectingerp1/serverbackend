@@ -12,7 +12,7 @@ sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 // Middleware to handle CORS
 app.use(cors({
-  origin: ['https://connectingdotserp.com', 'https://qhvpqmhj-3999.inc1.devtunnels.ms'],
+  origin: ['https://connectingdotserp.com', 'https://qhvpqmhj-3999.inc1.devtunnels.ms', 'https://sprightly-crumble-5e7b74.netlify.app/'],
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
@@ -24,6 +24,7 @@ app.options("*", cors());
 app.use(bodyParser.json());
 
 // MongoDB connection
+//const uri = "mongodb+srv://connectingerp1:<db_password>@connectingcluster.6ifho.mongodb.net/?retryWrites=true&w=majority&appName=Connectingcluster";
 mongoose.connect("mongodb+srv://connectingerp1:connecting@connectingcluster.6ifho.mongodb.net/dataconnecting", {
   useNewUrlParser: true,
   useUnifiedTopology: true,
