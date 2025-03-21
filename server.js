@@ -12,7 +12,7 @@ sgMail.setApiKey('SG.zISDPH74SpGQCLl6g6DcMA.IBFKSU4Rjp-agSxnXMD-jyoE5eVkV1hEWA0L
 
 // Middleware to handle CORS
 app.use(cors({
-  origin: ['https://connectingdotserp.com', 'https://qhvpqmhj-3999.inc1.devtunnels.ms', 'https://sprightly-crumble-5e7b74.netlify.app/'],
+  origin: ['https://connectingdotserp.com','https://connectingdotserp.com/', 'https://connectingdotserp.com/dashboard',  'https://qhvpqmhj-3999.inc1.devtunnels.ms', 'https://sprightly-crumble-5e7b74.netlify.app/'],
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
