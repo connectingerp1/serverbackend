@@ -12,8 +12,8 @@ sgMail.setApiKey('SG.zISDPH74SpGQCLl6g6DcMA.IBFKSU4Rjp-agSxnXMD-jyoE5eVkV1hEWA0L
 
 // Middleware to handle CORS
 app.use(cors({
-  origin: ['https://connectingdotserp.com','https://connectingdotserp.com/', 'https://connectingdotserp.com/dashboard',  'https://qhvpqmhj-3999.inc1.devtunnels.ms', 'https://sprightly-crumble-5e7b74.netlify.app/'],
-  methods: ['GET', 'POST'],
+  origin: ['https://connectingdotserp.com','https://connectingdotserp.com/', 'https://connectingdotserp.com/dashboard', 'https://sprightly-crumble-5e7b74.netlify.app/'],
+  methods: ['GET', 'POST', 'DELETE'],  // Added DELETE method
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
@@ -90,6 +90,7 @@ app.post("/api/submit", async (req, res) => {
     res.status(500).json({ message: "Internal Server Error", error: dbError.message });
   }
 });
+
 // API route to fetch all users (leads)
 app.get("/api/leads", async (req, res) => {
   try {
@@ -101,7 +102,7 @@ app.get("/api/leads", async (req, res) => {
   }
 });
 
-// Add this route to your server.js file
+// API route to delete a lead
 app.delete("/api/leads/:id", async (req, res) => {
   try {
     const { id } = req.params;
