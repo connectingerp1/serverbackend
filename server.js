@@ -101,6 +101,30 @@ app.get("/api/leads", async (req, res) => {
   }
 });
 
+// Add this route to your server.js file
+app.delete("/api/leads/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Check if ID is valid
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid ID format" });
+    }
+    
+    // Find and delete the user
+    const deletedUser = await User.findByIdAndDelete(id);
+    
+    if (!deletedUser) {
+      return res.status(404).json({ message: "Lead not found" });
+    }
+    
+    res.status(200).json({ message: "Lead deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting lead:", error);
+    res.status(500).json({ message: "Internal Server Error", error: error.message });
+  }
+});
+
 // Start the server
 app.listen(5001, '0.0.0.0', () => {
   console.log("Server is running on port 5001");
