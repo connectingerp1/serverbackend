@@ -2,18 +2,18 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const bodyParser = require("body-parser");
-const sgMail = require('@sendgrid/mail');  
+const sgMail = require('@sendgrid/mail');
+require('dotenv').config(); // Add this to load environment variables
 
 const app = express();
 
-// Set SendGrid API key
-//sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-sgMail.setApiKey('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');  // Replace with your SendGrid API key
+// Set SendGrid API key from environment variable
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 // Middleware to handle CORS
 app.use(cors({
   origin: ['https://connectingdotserp.com','https://connectingdotserp.com/', 'https://connectingdotserp.com/dashboard', 'https://sprightly-crumble-5e7b74.netlify.app/'],
-  methods: ['GET', 'POST', 'DELETE'],  // Added DELETE method
+  methods: ['GET', 'POST', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
@@ -24,8 +24,7 @@ app.options("*", cors());
 app.use(bodyParser.json());
 
 // MongoDB connection
-//const uri = "mongodb+srv://connectingerp1:<db_password>@connectingcluster.6ifho.mongodb.net/?retryWrites=true&w=majority&appName=Connectingcluster";
-mongoose.connect("mongodb+srv://connectingerp1:connecting@connectingcluster.6ifho.mongodb.net/dataconnecting", {
+mongoose.connect(process.env.MONGODB_URI || "mongodb+srv://connectingerp1:connecting@connectingcluster.6ifho.mongodb.net/dataconnecting", {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
@@ -60,8 +59,8 @@ app.post("/api/submit", async (req, res) => {
     // Try sending the email
     try {
       const msg = {
-        to: 'connectingerp1@gmail.com',
-        from: 'connectingerp1@gmail.com',
+        to: process.env.NOTIFICATION_EMAIL || 'connectingerp1@gmail.com',
+        from: process.env.SENDER_EMAIL || 'connectingerp1@gmail.com',
         subject: 'New User Submission',
         text: `A new user has registered. 
         Name: ${name}
@@ -127,6 +126,7 @@ app.delete("/api/leads/:id", async (req, res) => {
 });
 
 // Start the server
-app.listen(5001, '0.0.0.0', () => {
-  console.log("Server is running on port 5001");
+const PORT = process.env.PORT || 5001;
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server is running on port ${PORT}`);
 });
