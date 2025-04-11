@@ -20,35 +20,29 @@ if (!process.env.MONGODB_URI) {
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 // --- CORS Configuration ---
-// Be specific about allowed origins in production
 const allowedOrigins = [
     'https://connectingdotserp.com', // Main domain
     'https://www.connectingdotserp.com', // Optional www subdomain
     'https://sprightly-crumble-5e7b74.netlify.app', // Your Netlify preview/deploy
-    // Add localhost for development IF you run frontend locally
-    // 'http://localhost:3000'
+    'http://localhost:3000' // For local development
 ];
 
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests) or from allowed list
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
-      console.warn(`CORS blocked request from origin: ${origin}`); // Log blocked origins
+      console.warn(`CORS blocked request from origin: ${origin}`);
       callback(new Error('Not allowed by CORS'));
     }
   },
-  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'], // Include OPTIONS for preflight requests
+  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
 
 // --- Middleware ---
-// Body parser middleware MUST come before route handlers that need the parsed body
 app.use(bodyParser.json());
-// Optional: Handle URL-encoded data if needed
-// app.use(bodyParser.urlencoded({ extended: true }));
 
 // --- MongoDB Connection ---
 mongoose.connect(process.env.MONGODB_URI, {
@@ -60,7 +54,7 @@ mongoose.connect(process.env.MONGODB_URI, {
 })
 .catch((err) => {
   console.error("FATAL: Error connecting to MongoDB:", err);
-  process.exit(1); // Exit if DB connection fails
+  process.exit(1);
 });
 
 // --- Mongoose Schema and Model ---
@@ -68,15 +62,12 @@ const userSchema = new mongoose.Schema({
   name: { type: String, required: [true, 'Name is required'], trim: true },
   email: { type: String, required: [true, 'Email is required'], trim: true, lowercase: true },
   contact: { type: String, required: [true, 'Contact number is required'], trim: true },
-  countryCode: { type: String, required: [true, 'Country code is required'] },
+  // ** MODIFICATION: countryCode is now optional **
+  countryCode: { type: String, trim: true }, // Removed required constraint
   coursename: { type: String, trim: true }, // Optional
   location: { type: String, trim: true }, // Optional
   createdAt: { type: Date, default: Date.now },
 });
-
-// Optional: Add indexes for faster lookups (especially on fields you query often)
-// userSchema.index({ email: 1 }); // Index for email lookups
-// userSchema.index({ contact: 1, countryCode: 1 }); // Compound index if checking contact+code
 
 const User = mongoose.model("User", userSchema);
 
@@ -84,12 +75,12 @@ const User = mongoose.model("User", userSchema);
 
 // === Form Submission Route ===
 app.post("/api/submit", async (req, res) => {
-  // Destructure and trim inputs immediately
+  // Destructure inputs
   const {
     name: nameInput,
     email: emailInput,
     contact: contactInput,
-    countryCode: countryCodeInput,
+    countryCode: countryCodeInput, // Will be undefined if not sent
     coursename: coursenameInput,
     location: locationInput
   } = req.body;
@@ -98,81 +89,75 @@ app.post("/api/submit", async (req, res) => {
   const name = nameInput?.trim();
   const email = emailInput?.trim().toLowerCase();
   const contact = contactInput?.trim();
+  // Trim countryCode only if it exists
   const countryCode = countryCodeInput?.trim();
-  const coursename = coursenameInput?.trim() || 'N/A'; // Default if not provided
-  const location = locationInput?.trim() || 'N/A'; // Default if not provided
+  const coursename = coursenameInput?.trim() || 'N/A';
+  const location = locationInput?.trim() || 'N/A';
 
   // --- Backend Validation ---
-  // Check for required fields after trimming
-  if (!name || !email || !contact || !countryCode) {
-    console.log("Validation failed: Missing required fields.");
-    // Send 400 status for missing fields
-    return res.status(400).json({ message: "Please fill in all required fields (Name, Email, Contact)." });
+  // ** MODIFICATION: Check only for fundamentally required fields **
+  if (!name || !email || !contact) {
+    console.log("Validation failed: Missing required fields (Name, Email, Contact).");
+    return res.status(400).json({ message: "Please fill in Name, Email, and Contact Number." });
   }
-
-  // Optional: More specific backend email format validation
-  // const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  // if (!emailRegex.test(email)) {
-  //    console.log(`Validation failed: Invalid email format (${email}).`);
-  //    return res.status(400).json({ message: "Invalid email format provided." });
-  // }
-  // Note: Add similar backend validation for contact number format/length if needed
 
   try {
     // --- Check for existing user by email OR contact number ---
-    console.log(`Checking for existing user: email=${email}, contact=${contact}`); // Log check
+    // (This check remains the same, as it doesn't strictly depend on countryCode unless you need that level of specificity)
+    console.log(`Checking for existing user: email=${email}, contact=${contact}`);
     const existingUser = await User.findOne({
       $or: [
-        { email: email }, // Already lowercased
+        { email: email },
         { contact: contact }
-        // Optional: Check contact + countryCode for more specificity
-        // { contact: contact, countryCode: countryCode }
       ]
-    }).lean(); // .lean() can make it slightly faster if you only need to check existence
+    }).lean();
 
     if (existingUser) {
-      // Determine which field caused the conflict
-      let conflictMessage = "This record cannot be added because of a duplicate entry."; // Default
+      let conflictMessage = "This record cannot be added because of a duplicate entry.";
       if (existingUser.email === email) {
         conflictMessage = "This email address is already registered. Please use a different email.";
       } else if (existingUser.contact === contact) {
-        // Optional: && existingUser.countryCode === countryCode
+        // Consider adding countryCode check here if a number should only be unique *within* a country
+        // if (existingUser.contact === contact && (!countryCode || existingUser.countryCode === countryCode)) { ... }
         conflictMessage = "This contact number is already registered. Please use a different number.";
       }
-      console.log(`!!! Duplicate found. Sending 400. Message: "${conflictMessage}"`); // Log before sending
-      // Return 400 Bad Request with the specific message
-      return res.status(400).json({ message: conflictMessage }); // Ensure JSON format
+      console.log(`!!! Duplicate found. Sending 400. Message: "${conflictMessage}"`);
+      return res.status(400).json({ message: conflictMessage });
     }
 
     // --- If no existing user, proceed to save ---
     console.log("No duplicate found. Proceeding to save new user.");
+    // countryCode will be saved as undefined if not provided, which is fine as it's not required in schema
     const newUser = new User({
         name,
         email,
         contact,
-        countryCode,
+        countryCode, // Pass it along (will be undefined if missing)
         coursename,
         location
     });
-    await newUser.save(); // This now runs only if no duplicate was found
-    console.log("User saved successfully to database:", newUser._id); // Log success
+    await newUser.save();
+    console.log("User saved successfully to database:", newUser._id);
 
     // --- Send Email Notification (Best effort) ---
     if (process.env.SENDGRID_API_KEY && process.env.NOTIFICATION_EMAIL && process.env.SENDER_EMAIL) {
         try {
+            // ** MODIFICATION: Adjust email content for optional countryCode **
+            const contactDisplay = countryCode ? `${countryCode} ${contact}` : contact; // Display code only if present
+
             const msg = {
                 to: process.env.NOTIFICATION_EMAIL,
                 from: {
                     email: process.env.SENDER_EMAIL,
-                    name: 'Connecting Dots ERP Notifications' // Optional: Sender Name
+                    name: 'Connecting Dots ERP Notifications'
                 },
-                replyTo: email, // Optional: Set reply-to as the user's email
+                replyTo: email,
                 subject: `New Lead: ${name} (${coursename})`,
-                text: `New lead details:\n\nName: ${name}\nEmail: ${email}\nContact: ${countryCode} ${contact}\nCourse: ${coursename}\nLocation: ${location}\nSubmitted: ${new Date().toLocaleString()}`,
+                text: `New lead details:\n\nName: ${name}\nEmail: ${email}\nContact: ${contactDisplay}\nCourse: ${coursename}\nLocation: ${location}\nSubmitted: ${new Date().toLocaleString()}`,
                 html: `<h3>New Lead Registered</h3>
                        <p><strong>Name:</strong> ${name}</p>
                        <p><strong>Email:</strong> <a href="mailto:${email}">${email}</a></p>
-                       <p><strong>Contact:</strong> ${countryCode} ${contact}</p>
+                       <p><strong>Contact:</strong> ${contactDisplay}</p> {/* Use display variable */}
                        <p><strong>Course Name:</strong> ${coursename}</p>
                        <p><strong>Location:</strong> ${location}</p>
                        <p><em>Submitted at: ${new Date().toLocaleString()}</em></p>`
@@ -187,13 +172,16 @@ app.post("/api/submit", async (req, res) => {
     }
 
     // --- Success Response to Frontend ---
-    // Send 200 or 201 (Created) status
     return res.status(201).json({ message: "Registration successful! We will contact you soon." });
 
   } catch (dbError) {
-    // Catch errors from findOne or save operations (e.g., DB connection issues, validation errors *if defined in schema*)
+    // Catch errors from findOne or save operations
     console.error("!!! Error during database operation in /api/submit:", dbError);
-    // Send 500 Internal Server Error for unexpected database issues
+    // If it's a validation error from Mongoose (e.g., required field missing despite frontend check failing)
+    if (dbError.name === 'ValidationError') {
+        return res.status(400).json({ message: dbError.message });
+    }
+    // Otherwise, assume internal server error
     return res.status(500).json({ message: "An internal server error occurred. Please try again later.", error: dbError.message });
   }
 });
@@ -201,8 +189,7 @@ app.post("/api/submit", async (req, res) => {
 // === Fetch Leads Route ===
 app.get("/api/leads", async (req, res) => {
   try {
-    // Fetch users, sort by creation date descending
-    const users = await User.find().sort({ createdAt: -1 }).lean(); // Use .lean() for read-only ops
+    const users = await User.find().sort({ createdAt: -1 }).lean();
     res.status(200).json(users);
   } catch (error) {
     console.error("Error fetching leads:", error);
@@ -214,19 +201,13 @@ app.get("/api/leads", async (req, res) => {
 app.delete("/api/leads/:id", async (req, res) => {
   try {
     const { id } = req.params;
-
     if (!mongoose.Types.ObjectId.isValid(id)) {
-      console.log(`Delete failed: Invalid ID format (${id})`);
       return res.status(400).json({ message: "Invalid lead ID format." });
     }
-
     const deletedUser = await User.findByIdAndDelete(id);
-
     if (!deletedUser) {
-      console.log(`Delete failed: Lead not found with ID (${id})`);
       return res.status(404).json({ message: "Lead not found." });
     }
-
     console.log("Lead deleted successfully:", id);
     res.status(200).json({ message: "Lead deleted successfully." });
   } catch (error) {
@@ -235,32 +216,23 @@ app.delete("/api/leads/:id", async (req, res) => {
   }
 });
 
-// --- Basic Root Route (Optional: for health check) ---
+// --- Basic Root Route ---
 app.get("/", (req, res) => {
   res.status(200).send("Connecting Dots ERP Backend is running.");
 });
 
-// --- Global Error Handler (Optional but good practice) ---
-// Catches errors not handled by specific routes
+// --- Global Error Handler ---
 app.use((err, req, res, next) => {
-  // Handle CORS errors specifically if needed
   if (err.message === 'Not allowed by CORS') {
      console.error(`CORS Error caught by global handler: ${err.message} from origin ${req.header('Origin')}`);
      return res.status(403).json({ message: 'Access denied by CORS policy.' });
   }
-
-  // Log the error stack for debugging
   console.error("!!! Unhandled Error Caught by Global Handler:", err.stack || err);
-
-  // Send a generic 500 response
-  // Avoid sending detailed error stack to the client in production
   res.status(500).json({ message: 'An unexpected internal server error occurred.' });
 });
-
 
 // --- Start Server ---
 const PORT = process.env.PORT || 5001;
 app.listen(PORT, '0.0.0.0', () => {
-  // Use 0.0.0.0 to listen on all available network interfaces (important for containers/hosting)
   console.log(`Server is listening intently on port ${PORT}`);
 });
