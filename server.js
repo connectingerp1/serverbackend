@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const cors = require("cors");
 const bodyParser = require("body-parser");
 const sgMail = require('@sendgrid/mail');
+const bcrypt = require('bcryptjs');
 require('dotenv').config(); // Load environment variables
 
 const app = express();
@@ -23,7 +24,6 @@ sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 const allowedOrigins = [
     'https://connectingdotserp.com', // Main domain
     'https://www.connectingdotserp.com', // Optional www subdomain
-    'https://sprightly-crumble-5e7b74.netlify.app', // Your Netlify preview/deploy
     'http://localhost:3000' // For local development
 ];
 
@@ -62,7 +62,6 @@ const userSchema = new mongoose.Schema({
   name: { type: String, required: [true, 'Name is required'], trim: true },
   email: { type: String, required: [true, 'Email is required'], trim: true, lowercase: true },
   contact: { type: String, required: [true, 'Contact number is required'], trim: true },
-  // ** MODIFICATION: countryCode is now optional **
   countryCode: { type: String, trim: true }, // Removed required constraint
   coursename: { type: String, trim: true }, // Optional
   location: { type: String, trim: true }, // Optional
@@ -70,6 +69,14 @@ const userSchema = new mongoose.Schema({
 });
 
 const User = mongoose.model("User", userSchema);
+
+// --- Admin Schema & Model ---
+const adminSchema = new mongoose.Schema({
+  username: { type: String, required: true, unique: true },
+  password: { type: String, required: true }, // hashed
+  createdAt: { type: Date, default: Date.now }
+});
+const Admin = mongoose.model("Admin", adminSchema);
 
 // --- API Routes ---
 
@@ -95,7 +102,6 @@ app.post("/api/submit", async (req, res) => {
   const location = locationInput?.trim() || 'N/A';
 
   // --- Backend Validation ---
-  // ** MODIFICATION: Check only for fundamentally required fields **
   if (!name || !email || !contact) {
     console.log("Validation failed: Missing required fields (Name, Email, Contact).");
     return res.status(400).json({ message: "Please fill in Name, Email, and Contact Number." });
@@ -103,7 +109,6 @@ app.post("/api/submit", async (req, res) => {
 
   try {
     // --- Check for existing user by email OR contact number ---
-    // (This check remains the same, as it doesn't strictly depend on countryCode unless you need that level of specificity)
     console.log(`Checking for existing user: email=${email}, contact=${contact}`);
     const existingUser = await User.findOne({
       $or: [
@@ -117,8 +122,6 @@ app.post("/api/submit", async (req, res) => {
       if (existingUser.email === email) {
         conflictMessage = "This email address is already registered. Please use a different email.";
       } else if (existingUser.contact === contact) {
-        // Consider adding countryCode check here if a number should only be unique *within* a country
-        // if (existingUser.contact === contact && (!countryCode || existingUser.countryCode === countryCode)) { ... }
         conflictMessage = "This contact number is already registered. Please use a different number.";
       }
       console.log(`!!! Duplicate found. Sending 400. Message: "${conflictMessage}"`);
@@ -127,7 +130,6 @@ app.post("/api/submit", async (req, res) => {
 
     // --- If no existing user, proceed to save ---
     console.log("No duplicate found. Proceeding to save new user.");
-    // countryCode will be saved as undefined if not provided, which is fine as it's not required in schema
     const newUser = new User({
         name,
         email,
@@ -142,7 +144,6 @@ app.post("/api/submit", async (req, res) => {
     // --- Send Email Notification (Best effort) ---
     if (process.env.SENDGRID_API_KEY && process.env.NOTIFICATION_EMAIL && process.env.SENDER_EMAIL) {
         try {
-            // ** MODIFICATION: Adjust email content for optional countryCode **
             const contactDisplay = countryCode ? `${countryCode} ${contact}` : contact; // Display code only if present
 
             const msg = {
@@ -157,7 +158,7 @@ app.post("/api/submit", async (req, res) => {
                 html: `<h3>New Lead Registered</h3>
                        <p><strong>Name:</strong> ${name}</p>
                        <p><strong>Email:</strong> <a href="mailto:${email}">${email}</a></p>
-                       <p><strong>Contact:</strong> ${contactDisplay}</p> {/* Use display variable */}
+                       <p><strong>Contact:</strong> ${contactDisplay}</p>
                        <p><strong>Course Name:</strong> ${coursename}</p>
                        <p><strong>Location:</strong> ${location}</p>
                        <p><em>Submitted at: ${new Date().toLocaleString()}</em></p>`
@@ -177,11 +178,9 @@ app.post("/api/submit", async (req, res) => {
   } catch (dbError) {
     // Catch errors from findOne or save operations
     console.error("!!! Error during database operation in /api/submit:", dbError);
-    // If it's a validation error from Mongoose (e.g., required field missing despite frontend check failing)
     if (dbError.name === 'ValidationError') {
         return res.status(400).json({ message: dbError.message });
     }
-    // Otherwise, assume internal server error
     return res.status(500).json({ message: "An internal server error occurred. Please try again later.", error: dbError.message });
   }
 });
@@ -214,6 +213,33 @@ app.delete("/api/leads/:id", async (req, res) => {
     console.error(`Error deleting lead with ID (${req.params.id}):`, error);
     res.status(500).json({ message: "Internal Server Error occurred while deleting.", error: error.message });
   }
+});
+
+// === Admin Login Route ===
+app.post("/api/admin-login", async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ message: 'Username and password required.' });
+  }
+  try {
+    const admin = await Admin.findOne({ username });
+    if (!admin) {
+      return res.status(401).json({ message: 'Invalid username or password.' });
+    }
+    const isMatch = await bcrypt.compare(password, admin.password);
+    if (!isMatch) {
+      return res.status(401).json({ message: 'Invalid username or password.' });
+    }
+    return res.status(200).json({ message: 'Login successful.' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error.' });
+  }
+});
+
+// === Wake/Ping Endpoint ===
+app.get('/api/ping', (req, res) => {
+  res.status(200).json({ message: 'Server is awake!' });
 });
 
 // --- Basic Root Route ---
