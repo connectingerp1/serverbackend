@@ -403,7 +403,7 @@ app.post("/api/submit", async (req, res) => {
 // === Fetch Leads Route (Admin Protected) ===
 app.get("/api/leads", authMiddleware, requireRole(['SuperAdmin','Admin','EditMode','ViewMode']), async (req, res) => {
   try {
-    const users = await User.find().sort({ createdAt: -1 }).populate('assignedTo', 'username role').lean();
+    const users = await User.find().sort({ createdAt: -1 }).populate('assignedTo', 'username role color').lean();
     await logAction(req.admin.id, 'view_leads', 'User', {});
     res.status(200).json(users);
   } catch (error) {
@@ -696,7 +696,7 @@ app.get('/api/leads/filter', authMiddleware, requireRole(['SuperAdmin', 'Admin',
     // Get filtered leads
     const leads = await User.find(filter)
       .sort({ createdAt: -1 })
-      .populate('assignedTo', 'username role')
+      .populate('assignedTo', 'username role color')
       .lean();
 
     res.status(200).json(leads);
@@ -817,7 +817,7 @@ app.get('/api/admins', authMiddleware, requireRole(['SuperAdmin', 'Admin']), asy
       { role: { $ne: 'SuperAdmin' } } : // Admin users can't view SuperAdmins
       {};
 
-    const admins = await Admin.find(query).select('username email role active createdAt lastLogin').sort({ createdAt: -1 });
+    const admins = await Admin.find(query).select('username email role active createdAt lastLogin location color').sort({ createdAt: -1 });
     res.status(200).json(admins);
   } catch (err) {
     console.error('Error fetching admins:', err);
@@ -992,7 +992,7 @@ app.get('/api/users/:id', authMiddleware, requireRole(['SuperAdmin','Admin','Edi
   try {
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid user ID." });
-    const user = await User.findById(id).populate('assignedTo', 'username role').lean();
+    const user = await User.findById(id).populate('assignedTo', 'username role color').lean();
     if (!user) return res.status(404).json({ message: "User not found." });
     res.status(200).json(user);
   } catch (e) {
