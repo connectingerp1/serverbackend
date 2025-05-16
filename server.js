@@ -53,7 +53,9 @@ const userSchema = new mongoose.Schema({
   countryCode: { type: String, trim: true }, // Removed required constraint
   coursename: { type: String, trim: true }, // Optional
   location: { type: String, trim: true }, // Optional
-  status: { type: String, enum: ['New', 'Contacted', 'Converted', 'Rejected'], default: 'New' },
+  status: { type: String, enum: ['New', 'Contacted', 'Converted', 'Rejected', 'Not Interested', 'In Progress', 'Enrolled'], default: 'New' },
+  contactedScore: { type: Number, min: 1, max: 10 }, // Contacted score from 1-10
+  contactedComment: { type: String, trim: true }, // Comment for the contacted score
   notes: { type: String, trim: true, default: '' },
   assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', default: null },
   createdAt: { type: Date, default: Date.now },
@@ -177,9 +179,33 @@ function requireRole(roles) {
   };
 }
 
-async function logAction(adminId, action, target, metadata={}) {
-  try { await AuditLog.create({ adminId, action, target, metadata }); } catch(e){ console.error('AuditLog error', e); }
-}
+// Helper function to log actions
+const logAction = async (adminId, action, target, metadata = {}) => {
+  try {
+    // If we're logging an action involving a user/lead, fetch their details for better auditing
+    if (target === 'User' && metadata.userId) {
+      try {
+        const user = await User.findById(metadata.userId);
+        if (user) {
+          metadata.leadName = user.name;
+          metadata.leadEmail = user.email;
+          metadata.leadContact = user.contact;
+        }
+      } catch (e) {
+        console.error('Error fetching user details for audit log:', e);
+      }
+    }
+
+    return await AuditLog.create({
+      adminId,
+      action,
+      target,
+      metadata
+    });
+  } catch (err) {
+    console.error('Error logging action:', err);
+  }
+};
 
 // Create a function to track admin activity
 async function trackActivity(adminId, action, page = '', details = '') {
@@ -388,7 +414,7 @@ app.put("/api/leads/:id", authMiddleware, requireRole(['SuperAdmin','Admin','Edi
   try {
     const { id } = req.params;
     const updateFields = {};
-    const allowedFields = ['name','email','contact','countryCode','coursename','location','status','notes','assignedTo'];
+    const allowedFields = ['name','email','contact','countryCode','coursename','location','status','notes','assignedTo','contactedScore','contactedComment'];
     for (const key of allowedFields) {
       if (req.body[key] !== undefined) updateFields[key] = req.body[key];
     }
@@ -399,7 +425,7 @@ app.put("/api/leads/:id", authMiddleware, requireRole(['SuperAdmin','Admin','Edi
     if (!updatedUser) {
       return res.status(404).json({ message: "Lead not found." });
     }
-    await logAction(req.admin.id, 'update_lead', 'User', { leadId: id, updateFields });
+    await logAction(req.admin.id, 'update_lead', 'User', { leadId: id, updateFields, userId: id });
     res.status(200).json({ message: "Lead updated successfully.", lead: updatedUser });
   } catch (error) {
     console.error(`Error updating lead with ID (${req.params.id}):`, error);
@@ -418,7 +444,7 @@ app.delete("/api/leads/:id", authMiddleware, requireRole(['SuperAdmin','Admin'])
     if (!deletedUser) {
       return res.status(404).json({ message: "Lead not found." });
     }
-    await logAction(req.admin.id, 'delete_lead', 'User', { leadId: id });
+    await logAction(req.admin.id, 'delete_lead', 'User', { leadId: id, userId: id });
     console.log("Lead deleted successfully:", id);
     res.status(200).json({ message: "Lead deleted successfully." });
   } catch (error) {
@@ -442,7 +468,7 @@ app.put('/api/leads/bulk-update', authMiddleware, requireRole(['SuperAdmin', 'Ad
     }
 
     // Filter update fields
-    const allowedFields = ['status', 'notes', 'assignedTo'];
+    const allowedFields = ['status', 'notes', 'assignedTo', 'contactedScore', 'contactedComment'];
     const updateFields = {};
     for (const key of allowedFields) {
       if (updateData[key] !== undefined) updateFields[key] = updateData[key];
@@ -564,7 +590,14 @@ app.post("/api/admin-login", async (req, res) => {
   };
 
   try {
-    const admin = await Admin.findOne({ username, active: true });
+    // First try to find admin by username
+    let admin = await Admin.findOne({ username, active: true });
+
+    // If not found by username, try to find by email if the username looks like an email
+    if (!admin && username.includes('@')) {
+      admin = await Admin.findOne({ email: username.toLowerCase().trim(), active: true });
+    }
+
     if (!admin) {
       // Save failed login attempt
       await LoginHistory.create({
@@ -572,7 +605,7 @@ app.post("/api/admin-login", async (req, res) => {
         adminId: null,
         success: false
       });
-      return res.status(401).json({ message: 'Invalid username or password.' });
+      return res.status(401).json({ message: 'Invalid username/email or password.' });
     }
 
     const isMatch = await bcrypt.compare(password, admin.password);
@@ -583,7 +616,7 @@ app.post("/api/admin-login", async (req, res) => {
         adminId: admin._id,
         success: false
       });
-      return res.status(401).json({ message: 'Invalid username or password.' });
+      return res.status(401).json({ message: 'Invalid username/email or password.' });
     }
 
     // Update last login time
@@ -730,11 +763,45 @@ app.put('/api/role-permissions/:role', authMiddleware, requireRole(['SuperAdmin'
   }
 });
 
-// === Audit Log (SuperAdmin/Admin) ===
-app.get('/api/audit-logs', authMiddleware, requireRole(['SuperAdmin','Admin']), async (req, res) => {
+// === Audit Log (SuperAdmin only, with pagination and filters) ===
+app.get('/api/audit-logs', authMiddleware, requireRole(['SuperAdmin']), async (req, res) => {
   try {
-    const logs = await AuditLog.find().populate('adminId', 'username role').sort({ createdAt: -1 }).limit(200).lean();
-    res.status(200).json(logs);
+    const { adminId, action, startDate, endDate, page = 1, limit = 10 } = req.query;
+
+    // Build filter
+    const filter = {};
+    if (adminId) filter.adminId = adminId;
+    if (action) filter.action = action;
+
+    // Date filtering
+    if (startDate || endDate) {
+      filter.createdAt = {};
+      if (startDate) filter.createdAt.$gte = new Date(startDate);
+      if (endDate) {
+        const endDatePlusOne = new Date(endDate);
+        endDatePlusOne.setDate(endDatePlusOne.getDate() + 1);
+        filter.createdAt.$lte = endDatePlusOne;
+      }
+    }
+
+    // Count total documents for pagination
+    const totalItems = await AuditLog.countDocuments(filter);
+    const totalPages = Math.ceil(totalItems / parseInt(limit));
+
+    // Get paginated logs
+    const logs = await AuditLog.find(filter)
+      .sort({ createdAt: -1 })
+      .skip((parseInt(page) - 1) * parseInt(limit))
+      .limit(parseInt(limit))
+      .populate('adminId', 'username role')
+      .lean();
+
+    res.status(200).json({
+      logs,
+      totalItems,
+      totalPages,
+      currentPage: parseInt(page)
+    });
   } catch (e) {
     res.status(500).json({ message: 'Error fetching audit logs.', error: e.message });
   }
@@ -760,7 +827,7 @@ app.get('/api/users/:id', authMiddleware, requireRole(['SuperAdmin','Admin','Edi
 // Create user (lead) (Admin only)
 app.post('/api/users', authMiddleware, requireRole(['SuperAdmin','Admin','EditMode']), async (req, res) => {
   try {
-    const { name, email, contact, countryCode, coursename, location, status, notes, assignedTo } = req.body;
+    const { name, email, contact, countryCode, coursename, location, status, notes, assignedTo, contactedScore, contactedComment } = req.body;
     if (!name || !email || !contact) {
       return res.status(400).json({ message: "Name, email, and contact are required." });
     }
@@ -768,7 +835,7 @@ app.post('/api/users', authMiddleware, requireRole(['SuperAdmin','Admin','EditMo
     if (existingUser) {
       return res.status(409).json({ message: "User with this email or contact already exists." });
     }
-    const user = await User.create({ name, email, contact, countryCode, coursename, location, status, notes, assignedTo });
+    const user = await User.create({ name, email, contact, countryCode, coursename, location, status, notes, assignedTo, contactedScore, contactedComment });
     await logAction(req.admin.id, 'create_user', 'User', { userId: user._id });
     res.status(201).json({ message: "User created.", user });
   } catch (e) {
@@ -780,7 +847,7 @@ app.post('/api/users', authMiddleware, requireRole(['SuperAdmin','Admin','EditMo
 app.put('/api/users/:id', authMiddleware, requireRole(['SuperAdmin','Admin','EditMode']), async (req, res) => {
   try {
     const { id } = req.params;
-    const allowedFields = ['name','email','contact','countryCode','coursename','location','status','notes','assignedTo'];
+    const allowedFields = ['name','email','contact','countryCode','coursename','location','status','notes','assignedTo','contactedScore','contactedComment'];
     const updateFields = {};
     for (const key of allowedFields) {
       if (req.body[key] !== undefined) updateFields[key] = req.body[key];
@@ -849,17 +916,44 @@ app.get('/api/admin-activity', authMiddleware, requireRole(['SuperAdmin', 'Admin
   }
 });
 
-// === Get Login History ===
-app.get('/api/login-history', authMiddleware, requireRole(['SuperAdmin', 'Admin']), async (req, res) => {
+// === Get Login History (SuperAdmin only, with pagination and filters) ===
+app.get('/api/login-history', authMiddleware, requireRole(['SuperAdmin']), async (req, res) => {
   try {
-    const { adminId } = req.query;
-    const query = adminId ? { adminId } : {};
-    const history = await LoginHistory.find(query)
-      .populate('adminId', 'username role')
+    const { adminId, startDate, endDate, page = 1, limit = 10 } = req.query;
+
+    // Build filter
+    const filter = {};
+    if (adminId) filter.adminId = adminId;
+
+    // Date filtering
+    if (startDate || endDate) {
+      filter.loginAt = {};
+      if (startDate) filter.loginAt.$gte = new Date(startDate);
+      if (endDate) {
+        const endDatePlusOne = new Date(endDate);
+        endDatePlusOne.setDate(endDatePlusOne.getDate() + 1);
+        filter.loginAt.$lte = endDatePlusOne;
+      }
+    }
+
+    // Count total documents for pagination
+    const totalItems = await LoginHistory.countDocuments(filter);
+    const totalPages = Math.ceil(totalItems / parseInt(limit));
+
+    // Get paginated logs
+    const logs = await LoginHistory.find(filter)
       .sort({ loginAt: -1 })
-      .limit(200)
+      .skip((parseInt(page) - 1) * parseInt(limit))
+      .limit(parseInt(limit))
+      .populate('adminId', 'username role')
       .lean();
-    res.status(200).json(history);
+
+    res.status(200).json({
+      logs,
+      totalItems,
+      totalPages,
+      currentPage: parseInt(page)
+    });
   } catch (e) {
     res.status(500).json({ message: 'Error fetching login history.', error: e.message });
   }
