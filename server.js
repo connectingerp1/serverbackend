@@ -74,6 +74,22 @@ userSchema.pre('findOneAndUpdate', function(next) {
 
 const User = mongoose.model("User", userSchema);
 
+// --- Settings Schema & Model ---
+const settingsSchema = new mongoose.Schema({
+  key: { type: String, required: true, unique: true },
+  value: { type: mongoose.Schema.Types.Mixed, required: true },
+  description: { type: String, trim: true },
+  updatedAt: { type: Date, default: Date.now },
+  updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' }
+});
+
+settingsSchema.pre('findOneAndUpdate', function(next) {
+  this.set({ updatedAt: new Date() });
+  next();
+});
+
+const Settings = mongoose.model("Settings", settingsSchema);
+
 // --- Admin Schema & Model ---
 const adminSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
@@ -279,6 +295,29 @@ const initializeRolePermissions = async () => {
   }
 };
 
+// === Initialize Default Settings if not exists ===
+const initializeDefaultSettings = async () => {
+  try {
+    const defaultSettings = [
+      {
+        key: 'restrictLeadEditing',
+        value: false,
+        description: 'When enabled, only admins or assigned users can edit lead status and contacted fields'
+      }
+    ];
+
+    for (const setting of defaultSettings) {
+      const exists = await Settings.findOne({ key: setting.key });
+      if (!exists) {
+        await Settings.create(setting);
+        console.log(`Default setting created: ${setting.key}`);
+      }
+    }
+  } catch (error) {
+    console.error('Error initializing default settings:', error);
+  }
+};
+
 // --- MongoDB Connection ---
 mongoose.connect(process.env.MONGODB_URI, {
   useNewUrlParser: true,
@@ -287,6 +326,7 @@ mongoose.connect(process.env.MONGODB_URI, {
 .then(() => {
   console.log("Connected to MongoDB");
   initializeRolePermissions();
+  initializeDefaultSettings();
 })
 .catch((err) => {
   console.error("FATAL: Error connecting to MongoDB:", err);
@@ -482,9 +522,28 @@ app.patch("/api/leads/:id", authMiddleware, requireRole(['SuperAdmin','Admin','E
     }
 
     // Store original lead data for audit log
-    const originalLead = await User.findById(id).lean();
+    const originalLead = await User.findById(id).populate('assignedTo', 'username role').lean();
     if (!originalLead) {
       return res.status(404).json({ message: "Lead not found." });
+    }
+
+    // Check if lead editing is restricted to assigned users
+    const restrictLeadEditingSetting = await Settings.findOne({ key: 'restrictLeadEditing' }).lean();
+    const restrictLeadEditing = restrictLeadEditingSetting ? restrictLeadEditingSetting.value : false;
+
+    // If editing is restricted, check permissions
+    if (restrictLeadEditing && req.admin.role !== 'SuperAdmin' && req.admin.role !== 'Admin') {
+      // Check if current user is the assigned user for this lead
+      const currentAdminId = req.admin.id.toString();
+      const assignedToId = originalLead.assignedTo ? originalLead.assignedTo._id.toString() : null;
+
+      // If user is not the assigned user
+      if (assignedToId !== currentAdminId) {
+        return res.status(403).json({
+          message: "You can only edit leads assigned to you when restriction mode is enabled.",
+          restricted: true
+        });
+      }
     }
 
     const updatedUser = await User.findByIdAndUpdate(id, updateFields, { new: true, runValidators: true });
@@ -1195,6 +1254,72 @@ app.get('/api/analytics', authMiddleware, requireRole(['SuperAdmin', 'Admin']), 
     });
   } catch (e) {
     res.status(500).json({ message: 'Error fetching analytics.', error: e.message });
+  }
+});
+
+// === Settings Management Routes ===
+// Get all settings
+app.get('/api/settings', authMiddleware, requireRole(['SuperAdmin', 'Admin']), async (req, res) => {
+  try {
+    const settings = await Settings.find().lean();
+    res.status(200).json(settings);
+  } catch (e) {
+    console.error('Error fetching settings:', e);
+    res.status(500).json({ message: 'Error fetching settings.', error: e.message });
+  }
+});
+
+// Get specific setting by key
+app.get('/api/settings/:key', authMiddleware, requireRole(['SuperAdmin', 'Admin', 'EditMode', 'ViewMode']), async (req, res) => {
+  try {
+    const { key } = req.params;
+    const setting = await Settings.findOne({ key }).lean();
+
+    if (!setting) {
+      return res.status(404).json({ message: 'Setting not found.' });
+    }
+
+    res.status(200).json(setting);
+  } catch (e) {
+    console.error(`Error fetching setting ${req.params.key}:`, e);
+    res.status(500).json({ message: 'Error fetching setting.', error: e.message });
+  }
+});
+
+// Upsert setting (create or update)
+app.put('/api/settings/:key', authMiddleware, requireRole(['SuperAdmin']), async (req, res) => {
+  try {
+    const { key } = req.params;
+    const { value, description } = req.body;
+
+    if (value === undefined) {
+      return res.status(400).json({ message: 'Setting value is required.' });
+    }
+
+    const result = await Settings.findOneAndUpdate(
+      { key },
+      {
+        value,
+        description,
+        updatedBy: req.admin.id,
+        updatedAt: new Date()
+      },
+      { upsert: true, new: true, runValidators: true }
+    );
+
+    await logAction(req.admin.id, 'update_setting', 'Settings', {
+      key,
+      value,
+      description
+    });
+
+    res.status(200).json({
+      message: 'Setting updated successfully.',
+      setting: result
+    });
+  } catch (e) {
+    console.error(`Error updating setting ${req.params.key}:`, e);
+    res.status(500).json({ message: 'Error updating setting.', error: e.message });
   }
 });
 
