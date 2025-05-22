@@ -927,9 +927,24 @@ app.delete('/api/admins/:id', authMiddleware, requireRole(['SuperAdmin']), async
     if (req.admin.id === id) {
       return res.status(400).json({ message: "You cannot delete yourself." });
     }
+
+    // Get admin data before deletion for complete audit logging
+    const adminToDelete = await Admin.findById(id).lean();
+    if (!adminToDelete) return res.status(404).json({ message: 'Admin not found.' });
+
+    // Now delete the admin
     const admin = await Admin.findByIdAndDelete(id);
-    if (!admin) return res.status(404).json({ message: 'Admin not found.' });
-    await logAction(req.admin.id, 'delete_admin', 'Admin', { adminId: id });
+
+    // Log with detailed information
+    await logAction(req.admin.id, 'delete_admin', 'Admin', {
+      adminId: id,
+      username: adminToDelete.username,
+      email: adminToDelete.email,
+      role: adminToDelete.role,
+      location: adminToDelete.location,
+      deletedAt: new Date()
+    });
+
     res.status(200).json({ message: 'Admin deleted.' });
   } catch (e) {
     res.status(500).json({ message: 'Error deleting admin.', error: e.message });
@@ -1001,11 +1016,29 @@ app.get('/api/audit-logs', authMiddleware, requireRole(['SuperAdmin', 'Admin']),
     // Apply date range filter if provided
     if (startDate || endDate) {
       filter.createdAt = {};
-      if (startDate) filter.createdAt.$gte = new Date(startDate);
+      if (startDate) {
+        try {
+          filter.createdAt.$gte = new Date(startDate);
+        } catch (err) {
+          console.error(`Invalid startDate format: ${startDate}`, err);
+          // If date is invalid, don't apply this filter
+        }
+      }
+
       if (endDate) {
-        const endDatePlusOne = new Date(endDate);
-        endDatePlusOne.setDate(endDatePlusOne.getDate() + 1);
-        filter.createdAt.$lte = endDatePlusOne;
+        try {
+          const endDatePlusOne = new Date(endDate);
+          endDatePlusOne.setDate(endDatePlusOne.getDate() + 1);
+          filter.createdAt.$lte = endDatePlusOne;
+        } catch (err) {
+          console.error(`Invalid endDate format: ${endDate}`, err);
+          // If date is invalid, don't apply this filter
+        }
+      }
+
+      // If both date conversions failed, remove the empty filter
+      if (Object.keys(filter.createdAt).length === 0) {
+        delete filter.createdAt;
       }
     }
 
@@ -1013,7 +1046,21 @@ app.get('/api/audit-logs', authMiddleware, requireRole(['SuperAdmin', 'Admin']),
     if (action) filter.action = action;
 
     // Apply admin filter if provided
-    if (adminId) filter.adminId = mongoose.Types.ObjectId(adminId);
+    if (adminId) {
+      // Safely handle ObjectId conversion
+      try {
+        filter.adminId = mongoose.Types.ObjectId(adminId);
+      } catch (err) {
+        console.error(`Invalid adminId format: ${adminId}`, err);
+        // Return empty results rather than error
+        return res.status(200).json({
+          logs: [],
+          currentPage: pageNum,
+          totalPages: 0,
+          totalItems: 0
+        });
+      }
+    }
 
     // Non-SuperAdmin users can only view logs that don't relate to SuperAdmin actions
     if (req.admin.role === 'Admin') {
@@ -1158,16 +1205,62 @@ app.get('/api/login-history', authMiddleware, requireRole(['SuperAdmin']), async
 
     // Build filter
     const filter = {};
-    if (adminId) filter.adminId = adminId;
 
-    // Date filtering
+    // Admin filtering with safe ObjectId handling
+    if (adminId) {
+      try {
+        // Only convert to ObjectId if it's a valid format
+        if (mongoose.Types.ObjectId.isValid(adminId)) {
+          filter.adminId = mongoose.Types.ObjectId(adminId);
+        } else {
+          console.warn(`Invalid adminId format in login history: ${adminId}`);
+          // Return empty results for invalid ID
+          return res.status(200).json({
+            logs: [],
+            totalItems: 0,
+            totalPages: 0,
+            currentPage: parseInt(page)
+          });
+        }
+      } catch (err) {
+        console.error(`Error processing adminId: ${adminId}`, err);
+        // Return empty results rather than error
+        return res.status(200).json({
+          logs: [],
+          totalItems: 0,
+          totalPages: 0,
+          currentPage: parseInt(page)
+        });
+      }
+    }
+
+    // Date filtering with error handling
     if (startDate || endDate) {
       filter.loginAt = {};
-      if (startDate) filter.loginAt.$gte = new Date(startDate);
+
+      if (startDate) {
+        try {
+          filter.loginAt.$gte = new Date(startDate);
+        } catch (err) {
+          console.warn(`Invalid startDate format in login history: ${startDate}`);
+          // Don't apply this filter if invalid
+        }
+      }
+
       if (endDate) {
-        const endDatePlusOne = new Date(endDate);
-        endDatePlusOne.setDate(endDatePlusOne.getDate() + 1);
-        filter.loginAt.$lte = endDatePlusOne;
+        try {
+          const endDatePlusOne = new Date(endDate);
+          endDatePlusOne.setDate(endDatePlusOne.getDate() + 1);
+          filter.loginAt.$lte = endDatePlusOne;
+        } catch (err) {
+          console.warn(`Invalid endDate format in login history: ${endDate}`);
+          // Don't apply this filter if invalid
+        }
+      }
+
+      // If both date conversions failed, remove the empty filter
+      if (Object.keys(filter.loginAt).length === 0) {
+        delete filter.loginAt;
       }
     }
 
