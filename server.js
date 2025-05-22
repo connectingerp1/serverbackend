@@ -303,6 +303,16 @@ const initializeDefaultSettings = async () => {
         key: 'restrictLeadEditing',
         value: false,
         description: 'When enabled, only admins or assigned users can edit lead status and contacted fields'
+      },
+      {
+        key: 'maxLeadsToDisplay',
+        value: 100,
+        description: 'Maximum number of leads to display on the dashboard (0 to show all)'
+      },
+      {
+        key: 'restrictCounselorView',
+        value: false,
+        description: 'When enabled, counselors can only see leads assigned to them'
       }
     ];
 
@@ -441,14 +451,56 @@ app.post("/api/submit", async (req, res) => {
 });
 
 // === Fetch Leads Route (Admin Protected) ===
-app.get("/api/leads", authMiddleware, requireRole(['SuperAdmin','Admin','EditMode','ViewMode']), async (req, res) => {
+// Get leads with advanced filtering options and setting-based restrictions
+app.get('/api/leads', authMiddleware, requireRole(['SuperAdmin', 'Admin', 'EditMode', 'ViewMode']), async (req, res) => {
   try {
-    const users = await User.find().sort({ createdAt: -1 }).populate('assignedTo', 'username role color').lean();
-    await logAction(req.admin.id, 'view_leads', 'User', {});
-    res.status(200).json(users);
+    const { populate } = req.query;
+    let filter = {};
+
+    // Get settings that affect lead display
+    const maxLeadsToDisplaySetting = await Settings.findOne({ key: 'maxLeadsToDisplay' }).lean();
+    const restrictCounselorViewSetting = await Settings.findOne({ key: 'restrictCounselorView' }).lean();
+
+    const maxLeadsToDisplay = maxLeadsToDisplaySetting?.value || 0; // Default to 0 (show all)
+    const restrictCounselorView = restrictCounselorViewSetting?.value || false; // Default to false
+
+    // Apply counselor view restriction if enabled (except for SuperAdmin and Admin who can see all)
+    if (restrictCounselorView && req.admin.role !== 'SuperAdmin' && req.admin.role !== 'Admin') {
+      filter.assignedTo = req.admin.id;
+    }
+
+    // Build the query
+    let query = User.find(filter).sort({ createdAt: -1 });
+
+    // Apply population if requested
+    if (populate === 'assignedTo') {
+      query = query.populate('assignedTo', 'username role color');
+    }
+
+    // Apply lead display limit if set (maxLeadsToDisplay > 0)
+    if (maxLeadsToDisplay > 0) {
+      query = query.limit(maxLeadsToDisplay);
+    }
+
+    // Execute the query
+    const leads = await query.lean();
+
+    // Return the result
+    res.status(200).json(leads);
   } catch (error) {
-    console.error("Error fetching leads:", error);
-    res.status(500).json({ message: "Failed to fetch leads.", error: error.message });
+    console.error('Error fetching leads:', error);
+    res.status(500).json({ message: 'Error fetching leads', error: error.message });
+  }
+});
+
+// === Get total lead count ===
+app.get('/api/leads/count', authMiddleware, requireRole(['SuperAdmin', 'Admin']), async (req, res) => {
+  try {
+    const count = await User.countDocuments();
+    res.status(200).json({ count });
+  } catch (error) {
+    console.error('Error counting leads:', error);
+    res.status(500).json({ message: 'Error counting leads', error: error.message });
   }
 });
 
@@ -1350,69 +1402,71 @@ app.get('/api/analytics', authMiddleware, requireRole(['SuperAdmin', 'Admin']), 
   }
 });
 
-// === Settings Management Routes ===
-// Get all settings
-app.get('/api/settings', authMiddleware, requireRole(['SuperAdmin', 'Admin']), async (req, res) => {
+// === Settings API Routes ===
+
+// Get all settings (SuperAdmin only)
+app.get('/api/settings', authMiddleware, requireRole(['SuperAdmin']), async (req, res) => {
   try {
-    const settings = await Settings.find().lean();
+    const settings = await Settings.find().sort({ key: 1 }).lean();
     res.status(200).json(settings);
-  } catch (e) {
-    console.error('Error fetching settings:', e);
-    res.status(500).json({ message: 'Error fetching settings.', error: e.message });
+  } catch (error) {
+    console.error('Error fetching settings:', error);
+    res.status(500).json({ message: 'Error fetching settings', error: error.message });
   }
 });
 
-// Get specific setting by key
-app.get('/api/settings/:key', authMiddleware, requireRole(['SuperAdmin', 'Admin', 'EditMode', 'ViewMode']), async (req, res) => {
+// Get a specific setting by key (SuperAdmin, Admin)
+app.get('/api/settings/:key', authMiddleware, requireRole(['SuperAdmin', 'Admin']), async (req, res) => {
   try {
     const { key } = req.params;
     const setting = await Settings.findOne({ key }).lean();
 
     if (!setting) {
-      return res.status(404).json({ message: 'Setting not found.' });
+      return res.status(404).json({ message: `Setting "${key}" not found` });
     }
 
     res.status(200).json(setting);
-  } catch (e) {
-    console.error(`Error fetching setting ${req.params.key}:`, e);
-    res.status(500).json({ message: 'Error fetching setting.', error: e.message });
+  } catch (error) {
+    console.error(`Error fetching setting "${req.params.key}":`, error);
+    res.status(500).json({ message: 'Error fetching setting', error: error.message });
   }
 });
 
-// Upsert setting (create or update)
+// Update a setting by key (SuperAdmin only)
 app.put('/api/settings/:key', authMiddleware, requireRole(['SuperAdmin']), async (req, res) => {
   try {
     const { key } = req.params;
     const { value, description } = req.body;
 
+    // Validate input
     if (value === undefined) {
-      return res.status(400).json({ message: 'Setting value is required.' });
+      return res.status(400).json({ message: 'Setting value is required' });
     }
 
-    const result = await Settings.findOneAndUpdate(
+    // Find and update the setting
+    const setting = await Settings.findOneAndUpdate(
       { key },
       {
         value,
-        description,
-        updatedBy: req.admin.id,
-        updatedAt: new Date()
+        description: description || '',
+        updatedAt: new Date(),
+        updatedBy: req.admin.id
       },
-      { upsert: true, new: true, runValidators: true }
+      { new: true, upsert: true }
     );
 
-    await logAction(req.admin.id, 'update_setting', 'Settings', {
-      key,
-      value,
-      description
-    });
+    // Log the action
+    await logAction(
+      req.admin.id,
+      'update',
+      'Setting',
+      { key, oldValue: setting.value, newValue: value }
+    );
 
-    res.status(200).json({
-      message: 'Setting updated successfully.',
-      setting: result
-    });
-  } catch (e) {
-    console.error(`Error updating setting ${req.params.key}:`, e);
-    res.status(500).json({ message: 'Error updating setting.', error: e.message });
+    res.status(200).json(setting);
+  } catch (error) {
+    console.error(`Error updating setting "${req.params.key}":`, error);
+    res.status(500).json({ message: 'Error updating setting', error: error.message });
   }
 });
 
