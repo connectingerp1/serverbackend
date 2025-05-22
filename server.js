@@ -295,39 +295,6 @@ const initializeRolePermissions = async () => {
   }
 };
 
-// === Initialize Default Settings if not exists ===
-const initializeDefaultSettings = async () => {
-  try {
-    const defaultSettings = [
-      {
-        key: 'restrictLeadEditing',
-        value: false,
-        description: 'When enabled, only admins or assigned users can edit lead status and contacted fields'
-      },
-      {
-        key: 'maxLeadsToDisplay',
-        value: 100,
-        description: 'Maximum number of leads to display on the dashboard (0 to show all)'
-      },
-      {
-        key: 'restrictCounselorView',
-        value: false,
-        description: 'When enabled, counselors can only see leads assigned to them'
-      }
-    ];
-
-    for (const setting of defaultSettings) {
-      const exists = await Settings.findOne({ key: setting.key });
-      if (!exists) {
-        await Settings.create(setting);
-        console.log(`Default setting created: ${setting.key}`);
-      }
-    }
-  } catch (error) {
-    console.error('Error initializing default settings:', error);
-  }
-};
-
 // --- MongoDB Connection ---
 mongoose.connect(process.env.MONGODB_URI, {
   useNewUrlParser: true,
@@ -336,14 +303,195 @@ mongoose.connect(process.env.MONGODB_URI, {
 .then(() => {
   console.log("Connected to MongoDB");
   initializeRolePermissions();
-  initializeDefaultSettings();
+  // Call the function during startup
+  initDefaultSettings();
 })
 .catch((err) => {
   console.error("FATAL: Error connecting to MongoDB:", err);
   process.exit(1);
 });
 
+// Initialize default settings if they don't exist
+async function initDefaultSettings() {
+  try {
+    // Check if required settings exist
+    const requiredSettings = [
+      {
+        key: 'restrictLeadEditing',
+        value: false,
+        description: 'When enabled, only admins or assigned users can edit lead status and contacted fields'
+      },
+      {
+        key: 'restrictCounselorView',
+        value: false,
+        description: 'When enabled, counselors can only see leads assigned to them'
+      },
+      {
+        key: 'maxLeadsToDisplay',
+        value: 0,
+        description: 'Maximum number of leads to display on the dashboard (0 shows all leads)'
+      },
+      {
+        key: 'locationBasedAssignment',
+        value: false,
+        description: 'When enabled, leads will be automatically assigned to counselors based on their location'
+      },
+      {
+        key: 'locationAssignments',
+        value: {},
+        description: 'Location to counselor mapping for automatic assignment'
+      }
+    ];
+
+    for (const setting of requiredSettings) {
+      const exists = await Settings.findOne({ key: setting.key });
+      if (!exists) {
+        await Settings.create(setting);
+        console.log(`Created default setting: ${setting.key}`);
+      }
+    }
+
+    console.log("Default settings initialized");
+  } catch (error) {
+    console.error("Error initializing default settings:", error);
+  }
+}
+
+// Auto-assign lead based on location
+async function assignLeadByLocation(lead) {
+  try {
+    // Check if location-based assignment is enabled
+    const locationBasedSetting = await Settings.findOne({ key: 'locationBasedAssignment' });
+    if (!locationBasedSetting || !locationBasedSetting.value) {
+      return null; // Feature not enabled
+    }
+
+    // Get location assignments
+    const locationAssignmentsSetting = await Settings.findOne({ key: 'locationAssignments' });
+    if (!locationAssignmentsSetting || !locationAssignmentsSetting.value) {
+      return null; // No assignments configured
+    }
+
+    const assignments = locationAssignmentsSetting.value;
+    const leadLocation = (lead.location || '').trim();
+
+    if (!leadLocation) {
+      return null; // No location to match
+    }
+
+    console.log(`Checking location assignment for: ${leadLocation}`);
+
+    // Find matching admin for the lead location
+    for (const [adminId, locations] of Object.entries(assignments)) {
+      // Case-insensitive match for location
+      if (Array.isArray(locations)) {
+        // Try exact match first
+        const exactMatch = locations.some(loc =>
+          leadLocation.toLowerCase() === loc.toLowerCase()
+        );
+
+        if (exactMatch) {
+          // Found an exact match - verify admin exists and is active
+          const admin = await Admin.findOne({ _id: adminId, active: true });
+          if (admin) {
+            console.log(`Auto-assigned lead to ${admin.username} based on exact location match: ${leadLocation}`);
+            return adminId;
+          }
+        }
+
+        // Try partial match if no exact match found
+        const partialMatch = locations.some(loc =>
+          leadLocation.toLowerCase().includes(loc.toLowerCase()) ||
+          loc.toLowerCase().includes(leadLocation.toLowerCase())
+        );
+
+        if (partialMatch) {
+          // Found a partial match - verify admin exists and is active
+          const admin = await Admin.findOne({ _id: adminId, active: true });
+          if (admin) {
+            console.log(`Auto-assigned lead to ${admin.username} based on partial location match: ${leadLocation}`);
+            return adminId;
+          }
+        }
+      }
+    }
+
+    console.log(`No location assignment match found for: ${leadLocation}`);
+    return null; // No matching admin found
+  } catch (error) {
+    console.error("Error in location-based assignment:", error);
+    return null;
+  }
+}
+
 // --- API Routes ---
+
+// --- Contact Form Route (Lead Creation) ---
+app.post("/api/contact-form", async (req, res) => {
+  try {
+    // Validate required fields
+    const { name, email, contact, countryCode } = req.body;
+
+    if (!name || !email || !contact) {
+      return res.status(400).json({ success: false, message: "Name, email, and contact number are required." });
+    }
+
+    // Create new lead
+    const newUser = new User({
+      ...req.body,
+      status: 'New',
+      // Handle any potentially undefined fields to prevent schema validation errors
+      countryCode: countryCode || '+91' // Default to Indian code if not provided
+    });
+
+    // Check for location-based assignment
+    const assignedAdminId = await assignLeadByLocation(newUser);
+    if (assignedAdminId) {
+      newUser.assignedTo = assignedAdminId;
+      console.log(`Lead assigned to user ID: ${assignedAdminId}`);
+    } else {
+      console.log("No automatic location-based assignment applied");
+    }
+
+    await newUser.save();
+
+    // Send email notification if enabled
+    try {
+      const emailEnabled = process.env.EMAIL_NOTIFICATIONS === 'true';
+      const sendgridApiKey = process.env.SENDGRID_API_KEY;
+
+      if (emailEnabled && sendgridApiKey) {
+        const msg = {
+          to: process.env.NOTIFICATION_EMAIL || 'notifications@connectingdotserp.com',
+          from: process.env.FROM_EMAIL || 'noreply@connectingdotserp.com',
+          subject: 'New Lead Submission',
+          text: `New lead submitted: ${name} (${email}, ${contact})`,
+          html: `
+            <h3>New Lead Details:</h3>
+            <p><strong>Name:</strong> ${name}</p>
+            <p><strong>Email:</strong> ${email}</p>
+            <p><strong>Contact:</strong> ${contact}</p>
+            ${newUser.location ? `<p><strong>Location:</strong> ${newUser.location}</p>` : ''}
+            ${newUser.coursename ? `<p><strong>Course:</strong> ${newUser.coursename}</p>` : ''}
+            ${newUser.assignedTo ? `<p><strong>Auto-assigned:</strong> Yes</p>` : ''}
+          `,
+        };
+
+        await sgMail.send(msg);
+        console.log('Email notification sent');
+      }
+    } catch (emailError) {
+      console.error('Error sending email notification:', emailError);
+      // Continue execution even if email fails
+    }
+
+    console.log("Lead created successfully:", newUser._id);
+    res.status(201).json({ success: true, message: "Form submitted successfully!" });
+  } catch (error) {
+    console.error("Error submitting form:", error);
+    res.status(500).json({ success: false, message: "Error submitting form. Please try again later." });
+  }
+});
 
 // === Form Submission Route ===
 app.post("/api/submit", async (req, res) => {
@@ -792,16 +940,40 @@ app.get('/api/leads/filter', authMiddleware, requireRole(['SuperAdmin', 'Admin',
       filter.coursename = coursename;
     }
 
+    // Handle location filtering - accept multiple location parameters for OR filtering
     if (location) {
-      filter.location = location;
+      // If we receive a single location
+      if (typeof location === 'string') {
+        filter.location = { $regex: new RegExp(location, 'i') };
+      }
+      // If we receive multiple locations, use $or to match any of them
+      else if (Array.isArray(location)) {
+        filter.$or = filter.$or || [];
+        filter.$or.push(...location.map(loc => ({
+          location: { $regex: new RegExp(loc, 'i') }
+        })));
+      }
     }
 
     if (search) {
-      filter.$or = [
+      // If we already have $or from locations, we need to merge with search conditions
+      const searchConditions = [
         { name: { $regex: search, $options: 'i' } },
         { email: { $regex: search, $options: 'i' } },
         { contact: { $regex: search, $options: 'i' } }
       ];
+
+      if (filter.$or) {
+        // Combined location and search filtering using $and
+        filter.$and = [
+          { $or: filter.$or },
+          { $or: searchConditions }
+        ];
+        // Remove the original $or
+        delete filter.$or;
+      } else {
+        filter.$or = searchConditions;
+      }
     }
 
     // Get filtered leads
@@ -1432,15 +1604,147 @@ app.get('/api/settings/:key', authMiddleware, requireRole(['SuperAdmin', 'Admin'
   }
 });
 
+// Validate settings before update
+function validateSetting(key, value) {
+  console.log(`Validating setting: ${key} with value:`, value);
+
+  switch (key) {
+    case 'restrictLeadEditing':
+    case 'restrictCounselorView':
+    case 'locationBasedAssignment':
+      // These are boolean settings
+      if (typeof value !== 'boolean') {
+        console.warn(`Invalid value for ${key}, expected boolean, got ${typeof value}`);
+        return false;
+      }
+      return true;
+
+    case 'maxLeadsToDisplay':
+      // This should be a non-negative number
+      if (typeof value !== 'number' || value < 0) {
+        console.warn(`Invalid value for ${key}, expected non-negative number, got ${typeof value}: ${value}`);
+        return false;
+      }
+      return true;
+
+    case 'locationAssignments':
+      // This should be an object with valid IDs as keys and arrays of strings as values
+      if (typeof value !== 'object' || value === null) {
+        console.warn(`Invalid value for ${key}, expected object, got ${typeof value}`);
+        return false;
+      }
+
+      try {
+        // For empty objects, accept them
+        if (Object.keys(value).length === 0) {
+          console.log(`Empty location assignments object is valid`);
+          return true;
+        }
+
+        for (const [adminId, locations] of Object.entries(value)) {
+          // Validate admin ID format
+          if (!mongoose.Types.ObjectId.isValid(adminId)) {
+            console.warn(`Invalid admin ID in locationAssignments: ${adminId}`);
+            return false;
+          }
+
+          // Validate locations array
+          if (!Array.isArray(locations)) {
+            console.warn(`Locations for admin ${adminId} is not an array`);
+            return false;
+          }
+
+          // Validate each location is a non-empty string
+          for (const loc of locations) {
+            if (typeof loc !== 'string' || loc.trim() === '') {
+              console.warn(`Invalid location for admin ${adminId}: ${loc}`);
+              return false;
+            }
+          }
+        }
+        return true;
+      } catch (error) {
+        console.error(`Error validating locationAssignments:`, error);
+        return false;
+      }
+
+    default:
+      // For unknown settings, accept any value
+      return true;
+  }
+}
+
+// Create a new setting (SuperAdmin only)
+app.post('/api/settings', authMiddleware, requireRole(['SuperAdmin']), async (req, res) => {
+  try {
+    const { key, value, description } = req.body;
+
+    console.log(`Creating new setting: ${key} with value:`, value);
+
+    // Validate input
+    if (!key || value === undefined) {
+      return res.status(400).json({ message: 'Setting key and value are required' });
+    }
+
+    // Check if setting already exists
+    const existingSetting = await Settings.findOne({ key });
+    if (existingSetting) {
+      return res.status(409).json({ message: `Setting "${key}" already exists` });
+    }
+
+    // Validate setting based on its type
+    if (!validateSetting(key, value)) {
+      return res.status(400).json({ message: 'Invalid value for this setting type' });
+    }
+
+    // Create the setting
+    const setting = await Settings.create({
+      key,
+      value,
+      description: description || '',
+      updatedAt: new Date(),
+      updatedBy: req.admin.id
+    });
+
+    // Log the action
+    await logAction(
+      req.admin.id,
+      'create',
+      'Setting',
+      { key, value }
+    );
+
+    res.status(201).json(setting);
+  } catch (error) {
+    console.error(`Error creating setting:`, error);
+    res.status(500).json({ message: 'Error creating setting', error: error.message });
+  }
+});
+
 // Update a setting by key (SuperAdmin only)
 app.put('/api/settings/:key', authMiddleware, requireRole(['SuperAdmin']), async (req, res) => {
   try {
     const { key } = req.params;
     const { value, description } = req.body;
 
+    console.log(`Updating setting: ${key} with value:`, value);
+
     // Validate input
     if (value === undefined) {
       return res.status(400).json({ message: 'Setting value is required' });
+    }
+
+    // Validate setting based on its type
+    if (!validateSetting(key, value)) {
+      return res.status(400).json({ message: 'Invalid value for this setting type' });
+    }
+
+    // Get the existing setting to log changes
+    const existingSetting = await Settings.findOne({ key });
+    const oldValue = existingSetting ? existingSetting.value : undefined;
+
+    if (!existingSetting) {
+      console.log(`Setting ${key} not found, creating it now`);
     }
 
     // Find and update the setting
@@ -1458,9 +1762,9 @@ app.put('/api/settings/:key', authMiddleware, requireRole(['SuperAdmin']), async
     // Log the action
     await logAction(
       req.admin.id,
-      'update',
+      existingSetting ? 'update' : 'create',
       'Setting',
-      { key, oldValue: setting.value, newValue: value }
+      { key, oldValue, newValue: value }
     );
 
     res.status(200).json(setting);
