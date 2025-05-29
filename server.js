@@ -1406,19 +1406,104 @@ app.post('/api/activity', authMiddleware, async (req, res) => {
   }
 });
 
-// === Get Admin Activity Logs ===
+// --- Get Admin Activity Logs (SuperAdmin and Admin, with pagination and filters) ---
 app.get('/api/admin-activity', authMiddleware, requireRole(['SuperAdmin', 'Admin']), async (req, res) => {
   try {
-    const { adminId } = req.query;
-    const query = adminId ? { adminId } : {};
-    const logs = await ActivityLog.find(query)
-      .populate('adminId', 'username role')
-      .sort({ createdAt: -1 })
-      .limit(200)
-      .lean();
-    res.status(200).json(logs);
+    // Destructure query parameters with defaults
+    const {
+      page = 1, // Default to page 1
+      limit = 50, // Default items per page
+      startDate,
+      endDate,
+      action,
+      adminId // Filter by the admin whose activity is logged
+    } = req.query;
+
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Build filter object
+    const filter = {};
+
+    // Apply filter by admin ID whose activity is logged
+    if (adminId) {
+       // Safely handle ObjectId conversion
+       try {
+         filter.adminId = new mongoose.Types.ObjectId(adminId); // Use 'new' with ObjectId
+       } catch (err) {
+         console.warn(`Invalid adminId format in admin activity filter: ${adminId}`, err);
+         // If invalid ID is provided, return empty results rather than error
+         return res.status(200).json({
+           logs: [],
+           currentPage: pageNum,
+           totalPages: 0,
+           totalItems: 0
+         });
+       }
+    }
+
+    // Apply action filter if provided
+    if (action) filter.action = action;
+
+    // Apply date range filter if provided
+    if (startDate || endDate) {
+      filter.createdAt = {};
+      if (startDate) {
+        try {
+          // Ensure startDate is at the beginning of the day in UTC
+          const start = new Date(startDate);
+          start.setUTCHours(0, 0, 0, 0);
+          filter.createdAt.$gte = start;
+        } catch (err) {
+          console.warn(`Invalid startDate format in admin activity filter: ${startDate}`, err);
+          // If date is invalid, don't apply this specific date filter part
+           delete filter.createdAt; // Remove empty createdAt object if both fail
+        }
+      }
+
+      if (endDate) {
+        try {
+          // Ensure endDate is at the end of the day in UTC
+          const end = new Date(endDate);
+          end.setUTCHours(23, 59, 59, 999);
+          filter.createdAt.$lte = end;
+        } catch (err) {
+          console.warn(`Invalid endDate format in admin activity filter: ${endDate}`, err);
+          // If date is invalid, don't apply this specific date filter part
+           delete filter.createdAt; // Remove empty createdAt object if both fail
+        }
+      }
+
+       // If after processing dates, createdAt filter is still an empty object, remove it
+       if (filter.createdAt && Object.keys(filter.createdAt).length === 0) {
+         delete filter.createdAt;
+       }
+    }
+
+
+    // Count total documents matching the filter for pagination metadata
+    const totalItems = await ActivityLog.countDocuments(filter);
+    const totalPages = Math.ceil(totalItems / limitNum);
+
+    // Get paginated and filtered logs
+    const logs = await ActivityLog.find(filter)
+      .sort({ createdAt: -1 }) // Sort by newest first
+      .skip(skip)
+      .limit(limitNum)
+      .populate('adminId', 'username role color') // Populate admin details
+      .lean(); // Use lean() for better performance if not modifying docs
+
+    res.status(200).json({
+      logs,
+      currentPage: pageNum,
+      totalPages: totalPages,
+      totalItems: totalItems
+    });
+
   } catch (e) {
-    res.status(500).json({ message: 'Error fetching activity logs.', error: e.message });
+    console.error('Error fetching admin activity logs:', e);
+    res.status(500).json({ message: 'Error fetching admin activity logs.', error: e.message });
   }
 });
 
