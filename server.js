@@ -26,7 +26,8 @@ const allowedOrigins = [
     'https://connectingdotserp.com', // Main domain
     'https://www.connectingdotserp.com', // Optional www subdomain
     'http://localhost:3000', // For local development
-    'http://localhost:3001' // For local development
+    'http://localhost:3001', // For local development
+  'https://be99806c-4184-4047-bf1a-4722a67f4a59-00-18ec9cxba4fwz.sisko.replit.dev/' // Replit 
 ];
 
 app.use(cors({
