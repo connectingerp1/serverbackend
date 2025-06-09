@@ -151,7 +151,7 @@ const rolePermissionSchema = new mongoose.Schema({
     },
     leads: {
       create: { type: Boolean, default: false },
-      read: { type: Boolean, default: false }, 
+      read: { type: Boolean, default: false },
       update: { type: Boolean, default: false },
       delete: { type: Boolean, default: false }
     },
