@@ -7,6 +7,8 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 require('dotenv').config(); // Load environment variables
 
+const MAX_LOGIN_ATTEMPTS = 3; // Define the maximum login attempts allowed before deactivation
+
 const app = express();
 
 // --- Environment Variable Checks (Good Practice) ---
@@ -101,7 +103,9 @@ const adminSchema = new mongoose.Schema({
   color: { type: String, default: '#4299e1' }, // Default color
   lastLogin: { type: Date },
   createdAt: { type: Date, default: Date.now },
-  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' }
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+  // NEW: Fields for login security
+  loginAttempts: { type: Number, default: 0 } // Tracks consecutive failed login attempts
 });
 const Admin = mongoose.model("Admin", adminSchema);
 
@@ -117,7 +121,7 @@ const AuditLog = mongoose.model('AuditLog', auditLogSchema);
 
 // --- Login History Schema ---
 const loginHistorySchema = new mongoose.Schema({
-  adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', required: true },
+  adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', required: false }, // Made optional as admin might not be found
   ipAddress: { type: String, default: 'unknown' },
   userAgent: { type: String, default: 'unknown' },
   success: { type: Boolean, required: true },
@@ -147,7 +151,7 @@ const rolePermissionSchema = new mongoose.Schema({
     },
     leads: {
       create: { type: Boolean, default: false },
-      read: { type: Boolean, default: false },
+      read: { type: Boolean, default: false }, 
       update: { type: Boolean, default: false },
       delete: { type: Boolean, default: false }
     },
@@ -995,67 +999,84 @@ app.post("/api/admin-login", async (req, res) => {
     return res.status(400).json({ message: 'Username and password required.' });
   }
 
-  // Track login attempt for security
+  // Prepare data for login history, assuming failure initially
   const loginData = {
     ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress,
     userAgent: req.headers['user-agent'] || 'unknown',
-    success: false
+    success: false // Default to false
   };
 
   try {
-    // First try to find admin by username
-    let admin = await Admin.findOne({ username, active: true });
+    // Try to find admin by username or email (case-insensitive for email)
+    // IMPORTANT: Do NOT filter by `active: true` here, as we need to check inactive accounts too.
+    let admin = await Admin.findOne({
+      $or: [
+        { username: username },
+        { email: username.toLowerCase().trim() }
+      ]
+    });
 
-    // If not found by username, try to find by email if the username looks like an email
-    if (!admin && username.includes('@')) {
-      admin = await Admin.findOne({ email: username.toLowerCase().trim(), active: true });
-    }
-
+    // 1. Admin not found at all
     if (!admin) {
-      // Save failed login attempt
-      await LoginHistory.create({
-        ...loginData,
-        adminId: null,
-        success: false
-      });
+      // Log failed attempt without an adminId
+      await LoginHistory.create({ ...loginData, adminId: null });
       return res.status(401).json({ message: 'Invalid username/email or password.' });
     }
 
+    // Assign admin._id to loginData for logging purposes
+    loginData.adminId = admin._id;
+
+    // 2. Account is inactive (deactivated)
+    if (!admin.active) {
+        await LoginHistory.create(loginData); // Log as failed due to inactive account
+        return res.status(401).json({ message: 'Your account is currently inactive. Please contact an administrator.' });
+    }
+
+    // 3. Compare password
     const isMatch = await bcrypt.compare(password, admin.password);
+
     if (!isMatch) {
-      // Save failed login attempt with admin ID
-      await LoginHistory.create({
-        ...loginData,
-        adminId: admin._id,
-        success: false
+      // Password does NOT match
+      admin.loginAttempts = (admin.loginAttempts || 0) + 1; // Increment failed attempts
+
+      // Log the failed attempt
+      await LoginHistory.create(loginData);
+
+      if (admin.loginAttempts >= MAX_LOGIN_ATTEMPTS) {
+        admin.active = false; // Deactivate account
+        await admin.save();
+        // Log the account deactivation in audit logs
+        await logAction(admin._id, 'account_deactivated', 'Admin', { reason: 'Too many failed login attempts', attempts: admin.loginAttempts });
+        return res.status(401).json({ message: `Invalid password. Your account has been deactivated due to ${MAX_LOGIN_ATTEMPTS} failed login attempts. Please contact an administrator.` });
+      } else {
+        await admin.save(); // Save the incremented attempts
+        return res.status(401).json({ message: `Invalid username/email or password. You have ${MAX_LOGIN_ATTEMPTS - admin.loginAttempts} attempts remaining.` });
+      }
+    } else {
+      // Password MATCHES (Successful Login)
+      admin.loginAttempts = 0; // Reset failed attempts on successful login
+      admin.lastLogin = new Date();
+      await admin.save();
+
+      // Log the successful login
+      loginData.success = true; // Mark as success
+      await LoginHistory.create(loginData);
+
+      const token = generateToken(admin);
+      await logAction(admin._id, 'login', 'Admin', { result: 'success' });
+
+      return res.status(200).json({
+        message: 'Login successful.',
+        token,
+        role: admin.role,
+        username: admin.username,
+        id: admin._id,
+        active: admin.active // Return active status
       });
-      return res.status(401).json({ message: 'Invalid username/email or password.' });
     }
-
-    // Update last login time
-    admin.lastLogin = new Date();
-    await admin.save();
-
-    // Save successful login
-    await LoginHistory.create({
-      ...loginData,
-      adminId: admin._id,
-      success: true
-    });
-
-    const token = generateToken(admin);
-    await logAction(admin._id, 'login', 'Admin', {});
-
-    return res.status(200).json({
-      message: 'Login successful.',
-      token,
-      role: admin.role,
-      username: admin.username,
-      id: admin._id
-    });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error.' });
+    console.error("Error during admin login:", err);
+    res.status(500).json({ message: 'Server error during login.' });
   }
 });
 
@@ -1083,7 +1104,9 @@ app.post('/api/admins', authMiddleware, requireRole(['SuperAdmin']), async (req,
       email,
       location: location || 'Other',
       color: color || '#4299e1',
-      createdBy: req.admin.id
+      createdBy: req.admin.id,
+      loginAttempts: 0, // Initialize for new admins
+      active: true // New admins are active by default
     });
     await logAction(req.admin.id, 'create_admin', 'Admin', { adminId: admin._id, username, role });
     res.status(201).json({ message: 'Admin created.', admin: { id: admin._id, username: admin.username, role: admin.role, active: admin.active } });
@@ -1100,7 +1123,7 @@ app.get('/api/admins', authMiddleware, requireRole(['SuperAdmin', 'Admin']), asy
       { role: { $ne: 'SuperAdmin' } } : // Admin users can't view SuperAdmins
       {};
 
-    const admins = await Admin.find(query).select('username email role active createdAt lastLogin location color').sort({ createdAt: -1 });
+    const admins = await Admin.find(query).select('username email role active createdAt lastLogin location color loginAttempts').sort({ createdAt: -1 }); // Added loginAttempts
     res.status(200).json(admins);
   } catch (err) {
     console.error('Error fetching admins:', err);
@@ -1108,7 +1131,7 @@ app.get('/api/admins', authMiddleware, requireRole(['SuperAdmin', 'Admin']), asy
   }
 });
 
-// Update Admin (role, active)
+// Update Admin (role, active, password, email, location, color)
 app.put('/api/admins/:id', authMiddleware, requireRole(['SuperAdmin']), async (req, res) => {
   try {
     const { id } = req.params;
@@ -1120,14 +1143,37 @@ app.put('/api/admins/:id', authMiddleware, requireRole(['SuperAdmin']), async (r
       }
       updateFields.role = role;
     }
-    if (typeof active === 'boolean') updateFields.active = active;
+    // Only allow setting active status to false/true if it's explicitly provided
+    if (typeof active === 'boolean') {
+        updateFields.active = active;
+        // If an admin is manually reactivated, reset their login attempts
+        if (active === true) {
+            updateFields.loginAttempts = 0;
+        }
+    }
     if (password) updateFields.password = await bcrypt.hash(password, 10);
     if (email) updateFields.email = email;
     if (location) updateFields.location = location;
     if (color) updateFields.color = color;
+
+    // Fetch existing admin to log changes and ensure we don't accidentally unset fields
+    const existingAdmin = await Admin.findById(id);
+    if (!existingAdmin) {
+      return res.status(404).json({ message: 'Admin not found.' });
+    }
+
     const admin = await Admin.findByIdAndUpdate(id, updateFields, { new: true, runValidators: true });
     if (!admin) return res.status(404).json({ message: 'Admin not found.' });
-    await logAction(req.admin.id, 'update_admin', 'Admin', { adminId: id, updateFields });
+
+    // Log the changes made
+    const metadata = { adminId: id };
+    for (const key in updateFields) {
+        if (updateFields.hasOwnProperty(key)) {
+            metadata[key] = { from: existingAdmin[key], to: updateFields[key] };
+        }
+    }
+    await logAction(req.admin.id, 'update_admin', 'Admin', metadata);
+    
     res.status(200).json({
       message: 'Admin updated.',
       admin: {
@@ -1140,6 +1186,7 @@ app.put('/api/admins/:id', authMiddleware, requireRole(['SuperAdmin']), async (r
       }
     });
   } catch (e) {
+    console.error('Error updating admin:', e);
     res.status(500).json({ message: 'Error updating admin.', error: e.message });
   }
 });
@@ -1385,7 +1432,8 @@ app.delete('/api/users/:id', authMiddleware, requireRole(['SuperAdmin','Admin'])
 // === Get Current Admin Info ===
 app.get('/api/current-admin', authMiddleware, async (req, res) => {
   try {
-    const admin = await Admin.findById(req.admin.id).select('-password').lean();
+    // Select all fields except password and loginAttempts (security)
+    const admin = await Admin.findById(req.admin.id).select('-password -loginAttempts').lean();
     if (!admin) {
       return res.status(404).json({ message: 'Admin not found.' });
     }
