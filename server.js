@@ -27,8 +27,10 @@ sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 const allowedOrigins = [
     'https://connectingdotserp.com', // Main domain
     'https://www.connectingdotserp.com', // Optional www subdomain
-    'https://dashboard.connectingdotserp.com', // Main domain
-    'https://www.dashboard.connectingdotserp.com', // Optional www subdomain
+    'https://dashboard.connectingdotserp.com',
+    'https://www.dashboard.connectingdotserp.com',    
+    'https://superadmin.connectingdotserp.com',
+    'https://www.superadmin.connectingdotserp.com',
     'http://localhost:3000', // For local development
     'http://localhost:3001' // For local development
 ];
