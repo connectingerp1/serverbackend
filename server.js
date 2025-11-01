@@ -31,6 +31,7 @@ const allowedOrigins = [
     'https://www.dashboard.connectingdotserp.com',    
     'https://superadmin.connectingdotserp.com',
     'https://www.superadmin.connectingdotserp.com',
+    'https://connecting-dot-erp-97tq.vercel.app',
     'http://localhost:3000', // For local development
     'http://localhost:3001' // For local development
 ];
