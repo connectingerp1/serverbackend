@@ -1196,6 +1196,45 @@ app.put('/api/admins/:id', authMiddleware, requireRole(['SuperAdmin']), async (r
   }
 });
 
+
+// Reset another admin's password (SuperAdmin only)
+app.post('/api/admins/:id/reset-password', authMiddleware, requireRole(['SuperAdmin']), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { newPassword } = req.body;
+
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({ message: 'New password must be at least 6 characters.' });
+    }
+
+    const admin = await Admin.findById(id);
+    if (!admin) {
+      return res.status(404).json({ message: 'Admin not found.' });
+    }
+
+    // Prevent resetting SuperAdmin password
+    if (admin.role === 'SuperAdmin') {
+      return res.status(403).json({ message: 'Cannot reset password for a SuperAdmin.' });
+    }
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+    admin.password = hashed;
+    admin.loginAttempts = 0;
+    await admin.save();
+
+    await logAction(req.admin.id, 'reset_password', 'Admin', {
+      targetAdminId: admin._id,
+      targetUsername: admin.username,
+    });
+
+    res.status(200).json({ message: 'Password reset successfully.' });
+  } catch (error) {
+    console.error('Error resetting password:', error);
+    res.status(500).json({ message: 'Error resetting password.' });
+  }
+});
+
+
 // Delete Admin
 app.delete('/api/admins/:id', authMiddleware, requireRole(['SuperAdmin']), async (req, res) => {
   try {
